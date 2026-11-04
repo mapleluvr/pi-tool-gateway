@@ -1,0 +1,19 @@
+node_modules/
+
+# Local Pi and runtime state
+.pi/
+pi-bash-bg.json
+
+# Test, build, and runtime output
+docs/.temp/
+pi-tool-gateway.json
+coverage/
+dist/
+*.log
+*.tsbuildinfo
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

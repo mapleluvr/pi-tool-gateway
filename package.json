@@ -1,0 +1,48 @@
+{
+  "name": "pi-tool-gateway",
+  "version": "0.1.0",
+  "description": "MXC-backed sandboxing and session-scoped filesystem access control for Pi's shell and file tools on Windows.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mapleluvr/pi-tool-gateway.git"
+  },
+  "homepage": "https://github.com/mapleluvr/pi-tool-gateway#readme",
+  "bugs": {
+    "url": "https://github.com/mapleluvr/pi-tool-gateway/issues"
+  },
+  "keywords": ["pi-package", "pi-extension", "mxc", "sandbox", "windows", "powershell"],
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test \"tests/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "docs/OVERVIEW.md",
+    "docs/changes",
+    "docs/validation",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "^24.0.0",
+    "typescript": "5.9.3",
+    "typebox": "1.3.27"
+  },
+  "optionalDependencies": {
+    "@microsoft/mxc-sdk": "1.0.1"
+  }
+}

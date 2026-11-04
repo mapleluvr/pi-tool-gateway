@@ -1,0 +1,15 @@
+Pi Tool Gateway
+
+The shell backend selection and background-task implementation originates in
+mapleluvr/pi-bash-bg: https://github.com/mapleluvr/pi-bash-bg
+That package declares the MIT license. This project retains the implementation
+and adds the optional MXC execution gateway and session filesystem grants.
+
+The initial public snapshot derives from development commit
+01fccac996619dca642e19e4b88ce1df540de7fa. Local development history, private
+runtime configuration, raw validation output and unmerged interaction work
+are not part of the public snapshot.
+
+Microsoft Execution Container resources are supplied by the optional
+@microsoft/mxc-sdk dependency under its own license. Pi and TypeBox are
+host-provided peer dependencies; their code is not vendored here.

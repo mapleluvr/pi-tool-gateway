@@ -31,7 +31,7 @@ MXC 生效条件为 Windows、当前会话已启用、实际 Shell 为 PowerShel
 - 运行宿主为 Windows、Node.js 24+ 与 Pi coding agent。
 - MXC 模式使用 PowerShell 7 和可用的 Windows MXC ProcessContainer 环境。`@microsoft/mxc-sdk` 1.0.1 是锁定的可选资源依赖，提供 `wxc-exec.exe`；实际可用性由完整自检确定。
 - Pi 与 TypeBox 由宿主提供，包保留 peer dependencies；Native 模式不装载 MXC native DLL。
-- 完整工具/隔离回归的开发基线为 Pi 1.4.0；Pi 1.5.0 的参数 schema 兼容性已有定点核对。验证层次见[验证记录](docs/validation/publication.md)。
+- 开发基线为锁定的 Pi 1.4.0；slash 回执已通过 Pi 1.4/1.5 的真实 loader 与 TUI 组件验证。最近一次宿主 Windows watchdog 崩溃仍未归因，本轮未重跑真实 MXC；验证层次与限制见[最新验证记录](docs/validation/slash-feedback.md)。
 
 从 GitHub 安装：
 
@@ -63,7 +63,7 @@ pi --mxc
 /bash-select C:\absolute\path\to\pwsh.exe
 ```
 
-选择即时更新当前工具元数据并保存 Shell 偏好。
+选择即时更新当前工具元数据并保存 Shell 偏好。菜单标明各 Shell 的 MXC 资格；保存后若执行模式刷新失败，回执分别报告已保存和未完成的部分。
 
 | 工具 | 参数与行为 |
 | --- | --- |
@@ -74,24 +74,34 @@ pi --mxc
 | `bg_kill` | `{ taskId }`；请求停止所属进程树 |
 | `bg_join` | `{ taskId, timeoutSeconds }`；等待预算为 1–3600 秒，预算耗尽后任务继续运行 |
 
-前台调用的取消信号用于终止其所属任务；后台任务通过 `bg_kill` 停止。退出确认来自执行器收尾，取消预算耗尽时报告尚未确认的状态。`bg_wait` 属于子代理调度，不是此 Shell 任务注册表的等待入口。
+前台调用的取消信号用于终止其所属任务；后台任务可通过 `/mxc tasks` 选择，或 `/mxc stop <完整 taskId>`、`bg_kill` 请求停止。slash 停止入口只接受本插件登记的完整 ID，不接受宿主 PID 或缩写。退出确认来自执行器收尾；仅有 `killed` 记录或取消/清理失败时仍报告退出未确认。`bg_wait` 属于子代理调度，不是此 Shell 任务注册表的等待入口。
 
-## MXC 状态与恢复
+## MXC 交互、状态与恢复
 
 ```text
+/mxc
+/mxc help
 /mxc status
 /mxc on
 /mxc off
 /mxc retry
+/mxc tasks
+/mxc stop <完整 taskId>
 ```
 
-- `status` 显示请求偏好与有效模式；检查中的状态与 ready/fallback 分别呈现。
+- 无参数 `/mxc` 打开菜单；`help` 和参数补全提供可执行入口。菜单本身不启动环境检查。
+- 完整参数直接执行；缺少权限、目录或任务参数时，通过选择、输入和确认补齐。非交互环境需要完整参数。
+- `status` 显示请求偏好、有效模式、Shell 和工具覆盖；检查中的状态与 ready/fallback 分别呈现。
 - `on` / `off` 设置本会话偏好。会话重建和 reload 重新装载扩展；启动参数提供该次装载的初始偏好。
-- `retry` 建立新的检测代次，重新验证运行资源、布局与执行能力。
+- `retry` 在 MXC 已请求开启时建立新的检测代次，重新验证运行资源、布局与执行能力；关闭时不会隐式开启。
 - 普通文件或网络权限拒绝返回该调用的错误，当前模式保持 MXC。
 - 后端不可用时，提示回退及宿主权限。已经执行或执行结果不确定的调用返回失败与可能的副作用信息，该调用不在宿主自动重放。
 
-并发调用共享当前可用性检查；配置代次限定检查结果适用范围。旧检查结果不覆盖新的选择。
+并发调用共享当前可用性检查；配置代次限定检查结果适用范围。旧检查结果或旧会话的对话选择不覆盖新的配置。
+
+TUI 底栏显示即时模式，临时 widget 显示操作阶段与已等待时间；结束后逐条保留回执。日常回执只报告结果和必要变化，状态与资源详情由用户主动查询。回执不进入模型上下文，也不触发模型轮次；历史回执不恢复权限。RPC 使用通知和基础对话协议。
+
+Escape 可取消尚未提交的选择、输入或确认；关闭界面不等于取消已启动的共享环境检查。
 
 ## 文件系统与运行材料
 
@@ -135,18 +145,21 @@ profile 位于全部 RW 根之外且保持单一文件链接。配置修订依�
 
 ```text
 /mxc paths
+/mxc paths --details
+/mxc allow
+/mxc revoke
 /mxc allow ro "D:\Reference\shared-library"
 /mxc allow rw "D:\Shared\my-project"
 /mxc revoke "D:\Shared\my-project"
 ```
 
-- `paths` 列出实际模式、工作区、固定 profile、会话目录、可信运行资源和私有材料；Native/fallback 下列出的是配置，不代表隔离正在生效。
+- `paths` 列出工作区、固定 profile 和会话目录的权限与来源；`paths --details` 展开可信运行资源和每作业私有材料。Native/fallback 下明确标注目录配置尚未生效。
 - `allow` 接受已存在的本地 Windows 绝对目录，以 canonical 路径去重；同一目录可调整 RO/RW。会话目录彼此及与 cwd 分离。
 - 目录命令使用当前选定的 PowerShell 7 验证完整候选策略。成功且配置代次仍有效时，新的文件与命令调用一起采用它；失败、超时或过期候选保留原配置。
 - MXC 关闭时，目录命令可以验证和登记候选，开关偏好保持关闭。
 - `revoke` 撤销会话条目并登记本会话 deny；重新 `allow` 可替换它。其它 RW 根若保留指向撤销对象的硬链接，候选会被拒绝并保留原策略。
 - 目录授权存于当前扩展 runtime 内存，会话替换、reload 或退出后结束。插件不创建或删除用户目录，撤销不回收已复制的数据。
-- 运行中的调用和后台任务保留旧 lease。修改回执列出旧策略后台任务，用户可通过 `bg_kill` 停止它们。
+- 运行中的调用和后台任务保留旧 lease。确有运行中的旧权限任务时，回执列出对应 ID 与停止命令；`/mxc tasks` 可查询启动身份、退出确认和执行器错误。
 
 跨调用共享数据使用专用会话 RW 目录；每作业 TEMP 的生命周期仅覆盖本次执行。
 
@@ -174,4 +187,4 @@ npm test
 
 隔离测试使用真实 Windows MXC、PowerShell、独立夹具和宿主侧文件/PID 对照；控制流替身只用于控制流判断。完整测试需要可运行的 MXC 环境，不能以平台跳过代替隔离验收。测试中的 Pi loader/CLI 从锁定的开发 peer 定位，而非依赖作者的安装路径。
 
-[验证范围与结果](docs/validation/publication.md) · [维护入口](docs/OVERVIEW.md) · [来源与许可证](NOTICE)
+[最新验证范围与结果](docs/validation/slash-feedback.md) · [初始发布验证](docs/validation/publication.md) · [维护入口](docs/OVERVIEW.md) · [来源与许可证](NOTICE)

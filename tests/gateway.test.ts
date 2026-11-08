@@ -20,6 +20,7 @@ function fakePi() {
     tools, commands, handlers, flags, registrations,
     registerTool(tool: any) { tools.set(tool.name, tool); registrations.set(tool.name, (registrations.get(tool.name) ?? 0) + 1); },
     registerCommand(name: string, command: any) { commands.set(name, command); },
+    registerEntryRenderer() {},
     registerFlag(name: string, flag: any) { flags.set(name, flag.default); },
     getFlag(name: string) { return flags.get(name); },
     getSettings() { return {}; },

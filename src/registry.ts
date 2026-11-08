@@ -16,6 +16,8 @@ export interface BgTaskSnapshot {
   outputPath: string;
   startedAt: number;
   endedAt?: number;
+  /** A rejected cancellation/cleanup is not an executor exit acknowledgement. */
+  executionError?: string;
   execution?: ExecutionIdentity;
 }
 
@@ -167,6 +169,9 @@ export function createTaskRegistry(opts: {
       .then((result) => settleExecution(internal, result))
       .catch((error: unknown) => {
         if (internal.killed || internal.controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : String(error);
+          internal.snapshot = { ...internal.snapshot, executionError: message };
+          if (!stream.writableEnded && !stream.destroyed) stream.write(`\n[execution error: ${message}]\n`);
           settle(internal, "killed", null);
           return;
         }

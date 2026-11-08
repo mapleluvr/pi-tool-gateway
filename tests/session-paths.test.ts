@@ -165,7 +165,7 @@ test("a late candidate cannot undo off or install a grant into the changed confi
     try {
       await Promise.race([entered.promise, attempt.then(() => assert.fail("The real grant validation path was never reached"))]);
       await command("off"); release.resolve();
-      assert.ok((await attempt).some((notice) => notice.kind === "error"));
+      assert.ok((await attempt).some((notice) => notice.kind === "info" && notice.text.startsWith("[被较新配置取代]")));
       assert.match(statuses.at(-1) ?? "", /Native/);
       await command("on");
       await assert.rejects(call("write", { path: join(extra, "stale.txt"), content: "MUST_NOT_WRITE" }), /EACCES|EPERM|denied/i);

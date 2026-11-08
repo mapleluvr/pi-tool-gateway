@@ -20,6 +20,8 @@ import {
   type BackendStateStore,
 } from "./src/state.ts";
 import { createToolGateway, type GatewayDependencies } from "./src/gateway.ts";
+import type { CommandOperation } from "./src/feedback.ts";
+import { isMxcShell } from "./src/mxc/mode.ts";
 import {
   DEFAULT_LOGS_MAX_BYTES,
   createTaskRegistry,
@@ -177,7 +179,10 @@ export function createExtension(
   let cachedSelectionKey = "";
   let initialized = false;
   const notifiedWarnings = new Set<string>();
-  const gateway = createToolGateway(pi, dependencies.gateway ?? {}, (ctx) => syncActive(ctx).candidate, () => registry?.list() ?? []);
+  const gateway = createToolGateway(
+    pi, dependencies.gateway ?? {}, (ctx) => syncActive(ctx).candidate,
+    () => registry?.list() ?? [], (taskId) => getRegistry().kill(taskId),
+  );
 
   function selectionKey(selection: BackendSelection): string {
     return `${selection.backend}:${selection.shellPath ?? ""}`;
@@ -338,22 +343,35 @@ export function createExtension(
   async function applySelection(
     selection: BackendSelection,
     ctx: any,
+    operation: CommandOperation,
   ): Promise<void> {
-    const candidates = discover();
-    const candidate = resolveBackend(selection, candidates);
-    stateStore.write(selection);
-    cachedCandidates = candidates;
-    cachedSelectionKey = selectionKey(selection);
-    const next: ActiveBackend = {
-      state: { selection },
-      candidates,
-      candidate,
-    };
-    active = next;
-    activeKey = backendKey(next);
-    registerBashTool(candidate, undefined);
-    await gateway.refresh(ctx);
-    ctx?.ui?.notify?.(`bash backend: ${formatBackend(candidate)}`, "info");
+    let saved = false;
+    try {
+      operation.stage("正在探测选定 Shell");
+      const candidates = discover();
+      const candidate = resolveBackend(selection, candidates);
+      operation.stage("正在保存 Shell 选择");
+      stateStore.write(selection);
+      saved = true;
+      cachedCandidates = candidates;
+      cachedSelectionKey = selectionKey(selection);
+      active = { state: { selection }, candidates, candidate };
+      activeKey = backendKey(active);
+      registerBashTool(candidate, undefined);
+      operation.stage("Shell 已保存；正在刷新实际执行模式");
+      await gateway.refresh(ctx, operation);
+      let choice: string = selection.backend;
+      if (selection.backend === "auto") choice = `auto → ${candidate.id}`;
+      else if (selection.backend === "custom") choice = candidate.path;
+      operation.finish("完成", [`已保存 Shell: ${choice}`, gateway.oldTaskNotice()].filter(Boolean).join("\n"));
+    } catch (error) {
+      const cause = error instanceof Error ? error.message : String(error);
+      const state = saved
+        ? `Shell 选择已保存: ${selection.backend}；执行模式刷新失败。`
+        : "Shell 选择未保存。";
+      operation.finish(saved ? "已保存，刷新失败" : "拒绝", `${state}\n原因: ${cause}\n下一步：修正问题后 /bash-select，或 /mxc status 查询。`, saved ? "warning" : "error");
+      if (ctx?.hasUI === false) throw error;
+    }
   }
 
   function selectionOptions(
@@ -367,12 +385,13 @@ export function createExtension(
       // Keep auto visible even when no backend is installed.
     }
     const current = loaded.state.selection;
+    const eligibility = (candidate: BackendCandidate | undefined) => !candidate ? "不可执行" : isMxcShell(candidate) ? "MXC 候选" : "仅 Native";
     const marker = (backend: BackendId) =>
       current.backend === backend ? "[current] " : "";
     options.push({
       text: `${marker("auto")}auto — ${
         autoCandidate ? formatBackend(autoCandidate) : "no available backend"
-      }`,
+      } | ${eligibility(autoCandidate)}`,
       selection: { backend: "auto" },
     });
     const seen = new Set<string>();
@@ -380,13 +399,13 @@ export function createExtension(
       if (seen.has(candidate.id)) continue;
       seen.add(candidate.id);
       options.push({
-        text: `${marker(candidate.id)}${candidate.id} — ${formatBackend(candidate)}`,
+        text: `${marker(candidate.id)}${candidate.id} — ${formatBackend(candidate)} | ${eligibility(candidate)}`,
         selection: { backend: candidate.id },
       });
     }
     if (current.backend === "custom" && current.shellPath) {
       options.push({
-        text: `[current] custom — ${current.shellPath}`,
+        text: `[current] custom — ${current.shellPath} | ${eligibility(loaded.candidate)}`,
         selection: { ...current },
       });
     }
@@ -424,24 +443,34 @@ export function createExtension(
     },
     async handler(args: string, ctx: any) {
       const argument = args.trim();
+      const operation = gateway.feedback.start(ctx, "选择 Shell", "正在解析 Shell 选择");
       try {
-        if (!argument) {
+        let selection: BackendSelection;
+        if (argument) selection = selectionFromArgument(argument);
+        else {
+          if (ctx?.hasUI === false || typeof ctx?.ui?.select !== "function") throw new Error("Use /bash-select auto|pwsh7|gitbash|powershell51|<absolute-shell-path>");
+          operation.stage("正在发现可用 Shell");
           const loaded = syncActive(ctx, true);
+          const openedSelection = selectionKey(loaded.state.selection);
+          const openedGeneration = gateway.snapshot().generation;
           const choices = selectionOptions(loaded);
-          const selected = await ctx.ui.select(
-            "Select bash backend",
-            choices.map((choice) => choice.text),
-          );
-          if (!selected) return;
+          operation.stage("等待选择 Shell");
+          const selected = await ctx.ui.select("Select bash backend — 选择 Shell", choices.map((choice) => choice.text));
+          if (!operation.live()) return;
+          if (openedGeneration !== gateway.snapshot().generation || openedSelection !== selectionKey(stateStore.read().selection)) {
+            operation.finish("被较新配置取代", "旧 Shell 选择未保存；请重新 /bash-select。");
+            return;
+          }
+          if (!selected) { operation.finish("已取消", ""); return; }
           const choice = choices.find((value) => value.text === selected);
           if (!choice) throw new Error("Unknown backend selection");
-          await applySelection(choice.selection, ctx);
-          return;
+          selection = choice.selection;
         }
-        await applySelection(selectionFromArgument(argument), ctx);
+        await applySelection(selection, ctx, operation);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        ctx?.ui?.notify?.(`bash backend not changed: ${message}`, "error");
+        const cause = error instanceof Error ? error.message : String(error);
+        operation.finish("拒绝", `Shell 选择未保存。\n原因: ${cause}\n用法：/bash-select auto|pwsh7|gitbash|powershell51|<absolute-shell-path>`, "error");
+        if (ctx?.hasUI === false) throw error;
       }
     },
   });

@@ -36,7 +36,7 @@ test("the real local Pi 1.4 loader, registered tool execution, user bash and dyn
     };
     const input = {
       piPackageRoot: localPackage, extensionRoot: root, workspace: fixture.workspace,
-      reference: fixture.reference, outside: fixture.outside, agentDir, policyPath,
+      reference: fixture.reference, outside: fixture.outside, agentDir, policyPath, shell,
     };
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
@@ -58,6 +58,10 @@ test("the real local Pi 1.4 loader, registered tool execution, user bash and dyn
     assert.equal(facts.assistantMessages, 0);
     assert.equal(facts.environmentKeys.some((key: string) => /API.?KEY|TOKEN|SECRET|PASSWORD/i.test(key)), false);
     assert.equal(facts.errors.length, 0);
+    assert.deepEqual(facts.stops.map((stop: { mode: string; pidGone: boolean; bystanderAlive: boolean }) => ({ mode: stop.mode, pidGone: stop.pidGone, bystanderAlive: stop.bystanderAlive })), [
+      { mode: "mxc", pidGone: true, bystanderAlive: true },
+      { mode: "native", pidGone: true, bystanderAlive: true },
+    ]);
     assert.equal(await readFile(join(fixture.workspace, "loaded.txt"), "utf8"), "after\n中文 beta\n");
     assert.equal(await readFile(join(fixture.outside, "loaded-external.txt"), "utf8"), "LOADED_EXTERNAL_AFTER\n");
   } finally { await fixture.cleanup(); }

@@ -26,6 +26,7 @@ export async function withGateway(
   const pi: any = {
     registerTool: (tool: any) => tools.set(tool.name, tool),
     registerCommand: (name: string, command: any) => commands.set(name, command),
+    registerEntryRenderer() {},
     registerFlag: (name: string, flag: any) => flags.set(name, flag.default),
     getFlag: (name: string) => flags.get(name),
     getActiveTools: () => [...tools.keys()], getAllTools: () => [...tools.values()], getSettings: () => ({}),

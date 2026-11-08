@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { inspectProcess, sameProcess } from "./helpers/process-identity.ts";
 import { createServer, createConnection } from "node:net";
 import { mkdir, readFile, symlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -27,14 +28,6 @@ async function until<T>(read: () => Promise<T | undefined>, budgetMs = 12_000): 
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("Timed out waiting for the fixture's observable state");
-}
-function processExists(shell: string, pid: number): boolean {
-  const result = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command",
-    `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { exit 0 } else { exit 3 }`],
-  { stdio: "ignore", windowsHide: true, timeout: 5000 });
-  assert.equal(result.error, undefined);
-  assert.ok([0, 3].includes(result.status!), `Unexpected process observation exit code ${result.status}`);
-  return result.status === 0;
 }
 
 test("a workspace junction cannot redirect real MXC reads/writes to the ungranted host sentinel", local, async () => {
@@ -124,7 +117,8 @@ test("real bg_kill reaps the MXC PowerShell PID and leaves an unrelated same-ima
     const logs = join(fixture.dir, "task-logs");
     await mkdir(logs);
     const registry = createTaskRegistry({ dir: logs, executor: runtime.createExecutor() });
-    const unrelated = spawn(runtime.candidate.path, ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"], { stdio: "ignore", windowsHide: true });
+    const env = { SYSTEMROOT: process.env.SystemRoot ?? process.env.SYSTEMROOT ?? "C:\\Windows", HOME: fixture.dir, USERPROFILE: fixture.dir, LOCALAPPDATA: fixture.dir, TEMP: fixture.dir, TMP: fixture.dir };
+    const unrelated = spawn(runtime.candidate.path, ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"], { env, stdio: "ignore", windowsHide: true });
     const unrelatedClosed = new Promise<void>((resolve) => unrelated.once("close", () => resolve()));
     try {
       assert.ok(unrelated.pid);
@@ -133,15 +127,17 @@ test("real bg_kill reaps the MXC PowerShell PID and leaves an unrelated same-ima
         execution: { mode: "mxc", shellPath: runtime.candidate.path, workspace: fixture.workspace, policyId: runtime.policyId },
       });
       const ownedPid = await until(async () => {
-        const match = (await registry.logs(task.id)).match(/MXC_OWNED_PID=(\d+)/);
+        const match = (await registry.logs(task.id)).match(/MXC_OWNED_PID=(\d+)\r?\n/);
         return match ? Number(match[1]) : undefined;
       });
-      assert.equal(processExists(runtime.candidate.path, ownedPid), true, "Observe the real process before cancellation");
-      assert.equal(processExists(runtime.candidate.path, unrelated.pid), true);
+      const before = inspectProcess(runtime.candidate.path, ownedPid, env);
+      const unrelatedBefore = inspectProcess(runtime.candidate.path, unrelated.pid, env);
+      assert.ok(before.observed); assert.ok(unrelatedBefore.observed);
       const stopped = await registry.kill(task.id);
       assert.equal(stopped.status, "killed");
-      assert.equal(processExists(runtime.candidate.path, ownedPid), false, "Logical killed is not enough: the original PowerShell must be gone");
-      assert.equal(processExists(runtime.candidate.path, unrelated.pid), true, "Cancellation must not target an image name");
+      assert.equal(stopped.executionError, undefined);
+      assert.equal(sameProcess(before.observed, inspectProcess(runtime.candidate.path, ownedPid, env).observed), false, "Logical killed is not enough: the original PowerShell identity must be gone");
+      assert.equal(sameProcess(unrelatedBefore.observed, inspectProcess(runtime.candidate.path, unrelated.pid, env).observed), true, "The original unrelated process must survive");
     } finally {
       registry.dispose(); killProcessTree(unrelated); await unrelatedClosed;
     }

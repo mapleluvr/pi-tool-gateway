@@ -60,7 +60,7 @@ test("a profile changed immediately after grant commit governs the next real fil
     let changes = 0;
     ctx.ui.notify = (text: string, kind: string) => {
       original(text, kind);
-      if (text.startsWith("会话目录 RO:")) {
+      if (/^会话目录 RO:/m.test(text)) {
         writeFileSync(profile, JSON.stringify({ version: 1, filesystem: { deniedPaths: [target] } }));
         changes++;
       }

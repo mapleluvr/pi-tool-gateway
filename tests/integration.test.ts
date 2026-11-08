@@ -61,6 +61,7 @@ test(
         tools.set(tool.name, tool);
       },
       registerCommand() {},
+      registerEntryRenderer() {},
       registerFlag() {},
       getFlag() { return undefined; },
       on() {},

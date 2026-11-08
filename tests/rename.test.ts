@@ -95,6 +95,7 @@ test("the gateway foreground budget takes precedence over the legacy variable", 
     const pi = {
       registerTool(tool: any) { tools.set(tool.name, tool); },
       registerCommand() {},
+      registerEntryRenderer() {},
       registerFlag() {},
       getFlag() { return undefined; },
       on(name: string, handler: any) { handlers.set(name, handler); },

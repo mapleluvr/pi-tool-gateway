@@ -80,8 +80,8 @@ test("session replacement invalidates both a pending candidate and its queued di
     try {
       await Promise.race([entered.promise, first.then(() => assert.fail("Candidate validation was not entered"))]);
       await restart(); release.resolve();
-      assert.ok((await first).some((notice) => notice.kind === "error"));
-      assert.ok((await second).some((notice) => notice.kind === "error"));
+      assert.deepEqual(await first, [], "The replaced session must not receive the old candidate receipt");
+      assert.deepEqual(await second, [], "The replaced session must not receive the old queued command receipt");
       await assert.rejects(call("read", { path: join(fixture.outside, "sentinel.txt") }), /EACCES|EPERM|denied/i);
       await assert.rejects(call("write", { path: join(extra, "stale.txt"), content: "MUST_NOT_WRITE" }), /EACCES|EPERM|denied/i);
     } finally { release.resolve(); await Promise.all([first, second]); }

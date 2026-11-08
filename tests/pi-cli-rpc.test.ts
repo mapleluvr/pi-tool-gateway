@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { inspectProcess, sameProcess } from "./helpers/process-identity.ts";
 import { mkdir, readFile, readlink, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,19 +86,72 @@ test("the real bundled Pi 1.4 CLI keeps MXC user-bash control across a new sessi
   function latestStatus(): string {
     return messages.filter((message) => message.type === "extension_ui_request" && message.method === "setStatus" && message.statusKey === "pi-tool-gateway").at(-1)?.statusText ?? "";
   }
+  const answeredDialogs = new Set<string>();
+  async function answerDialog(method: string, from: number, response: (request: any) => Record<string, unknown>) {
+    const find = () => messages.slice(from).find((message) => message.type === "extension_ui_request" && message.method === method && !answeredDialogs.has(message.id));
+    await waitFor(() => Boolean(find()));
+    const request = find();
+    answeredDialogs.add(request.id);
+    child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: request.id, ...response(request) })}\n`);
+    return request;
+  }
+  function beginPrompt(message: string) {
+    const request = send("prompt", { message });
+    void request.catch(() => undefined); // waitFor may fail before this request is awaited.
+    return request;
+  }
   const sentinel = join(fixture.outside, "sentinel.txt").replaceAll("'", "''");
   const deniedCommand = `$ErrorActionPreference='Stop'; try { Get-Content -LiteralPath '${sentinel}'; Write-Output 'RPC_UNEXPECTED_READ' } catch { Write-Output 'RPC_MXC_DENIED' }`;
   try {
     await waitFor(() => /files: MXC/.test(latestStatus()));
+    const menuFrom = messages.length;
+    const menu = beginPrompt("/mxc");
+    await answerDialog("select", menuFrom, (request) => {
+      assert.ok(request.title.includes(fixture.workspace));
+      return { cancelled: true };
+    });
+    await menu;
+    assert.ok(messages.slice(menuFrom).some((message) => message.method === "notify" && /已取消/.test(message.message)));
+    assert.match(latestStatus(), /files: MXC/);
     const denied = await send("bash", { command: deniedCommand, excludeFromContext: true });
     assert.match(denied.output, /RPC_MXC_DENIED/); assert.doesNotMatch(denied.output, /OUTSIDE_CANARY|RPC_UNEXPECTED_READ/);
-    await send("prompt", { message: `/mxc allow ro "${fixture.outside}"` });
+    const guidedFrom = messages.length;
+    const guided = beginPrompt("/mxc allow");
+    await answerDialog("select", guidedFrom, (request) => {
+      const value = request.options.find((option: string) => option.startsWith("ro "));
+      assert.ok(value); return { value };
+    });
+    await answerDialog("input", guidedFrom, () => ({ value: fixture.outside }));
+    await answerDialog("confirm", guidedFrom, (request) => {
+      assert.ok(request.message.includes(fixture.outside));
+      assert.match(request.message, /RO/); return { confirmed: true };
+    });
+    await guided;
+    const guidedMessages = messages.slice(guidedFrom);
+    const progressIndex = guidedMessages.findIndex((message) => message.method === "setWidget" && message.widgetLines?.some((line: string) => /验证.*目录候选/.test(line)));
+    const receiptIndex = guidedMessages.findIndex((message) => message.method === "notify" && /会话目录 RO/.test(message.message));
+    assert.ok(progressIndex >= 0 && receiptIndex > progressIndex, "Real candidate validation must show progress before its final receipt");
+    const widgetKey = guidedMessages[progressIndex].widgetKey;
+    assert.equal(guidedMessages.filter((message) => message.method === "setWidget" && message.widgetKey === widgetKey).at(-1)?.widgetLines, undefined);
     const allowedRead = await send("bash", { command: deniedCommand, excludeFromContext: true });
     assert.match(allowedRead.output, /OUTSIDE_CANARY/); assert.doesNotMatch(allowedRead.output, /RPC_MXC_DENIED/);
+    const directFrom = messages.length;
     await send("prompt", { message: `/mxc allow rw "${fixture.outside}"` });
+    assert.equal(messages.slice(directFrom).some((message) => ["select", "input", "confirm"].includes(message.method)), false, "Complete commands must not add a second confirmation");
     const external = join(fixture.outside, "rpc-shared.txt");
     await send("bash", { command: `$ErrorActionPreference='Stop'; Set-Content -LiteralPath '${external}' -Value 'RPC_SESSION_RW'`, excludeFromContext: true });
     assert.equal((await readFile(external, "utf8")).trim(), "RPC_SESSION_RW");
+    const revokeFrom = messages.length;
+    const revoke = beginPrompt("/mxc revoke");
+    await answerDialog("select", revokeFrom, (request) => {
+      const value = request.options.find((option: string) => option.includes(fixture.outside));
+      assert.ok(value); return { value };
+    });
+    await answerDialog("confirm", revokeFrom, () => ({ cancelled: true }));
+    await revoke;
+    assert.ok(messages.slice(revokeFrom).some((message) => message.method === "notify" && /已取消/.test(message.message)));
+    await send("bash", { command: `$ErrorActionPreference='Stop'; Set-Content -LiteralPath '${external}' -Value 'RPC_REVOKE_CANCELLED'`, excludeFromContext: true });
+    assert.equal((await readFile(external, "utf8")).trim(), "RPC_REVOKE_CANCELLED");
     await send("prompt", { message: "/mxc paths" });
     assert.ok(messages.some((message) => message.method === "notify" && /session/.test(message.message) && message.message.includes(fixture.outside)));
     await send("prompt", { message: "/mxc off" });
@@ -106,24 +160,25 @@ test("the real bundled Pi 1.4 CLI keeps MXC user-bash control across a new sessi
     await waitFor(() => /files: MXC/.test(latestStatus()));
     const afterNew = await send("bash", { command: deniedCommand, excludeFromContext: true });
     assert.match(afterNew.output, /RPC_MXC_DENIED/);
-    assert.equal((await readFile(external, "utf8")).trim(), "RPC_SESSION_RW", "Session replacement must not delete user directories");
+    assert.equal((await readFile(external, "utf8")).trim(), "RPC_REVOKE_CANCELLED", "Session replacement must not delete user directories");
     let ownedPid = 0;
     const from = messages.length;
     const running = send("bash", { command: "[Console]::WriteLine('RPC_MXC_PID=' + $PID); [Console]::Out.Flush(); while ($true) { Start-Sleep -Milliseconds 100 }", excludeFromContext: true });
     const runningObserved = running.then((value) => ({ value }), (error: Error) => ({ error }));
     await waitFor(() => {
       const text = messages.slice(from).filter((message) => message.type === "bash_execution_update").map((message) => message.delta).join("");
-      const match = text.match(/RPC_MXC_PID=(\d+)/);
+      const match = text.match(/RPC_MXC_PID=(\d+)\r?\n/);
       if (match) ownedPid = Number(match[1]);
       return ownedPid > 0;
     });
-    const before = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", `if (Get-Process -Id ${ownedPid} -ErrorAction SilentlyContinue) { exit 0 } else { exit 3 }`], { stdio: "ignore", windowsHide: true });
-    assert.equal(before.status, 0);
+    const before = inspectProcess(shell, ownedPid, env);
+    assert.ok(before.observed);
     await send("abort_bash");
     const stopped = await runningObserved;
     assert.ok("value" in stopped, "RPC abort did not finish normally"); assert.equal(stopped.value.cancelled, true);
-    const after = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", `if (Get-Process -Id ${ownedPid} -ErrorAction SilentlyContinue) { exit 0 } else { exit 3 }`], { stdio: "ignore", windowsHide: true });
-    assert.equal(after.status, 3);
+    const after = inspectProcess(shell, ownedPid, env);
+    assert.equal(sameProcess(before.observed, after.observed), false);
+    await writeFile(join(evidence, "pi-rpc-cancellation.json"), JSON.stringify({ before, after }, null, 2));
     await writeFile(profile, "{invalid trusted fixture");
     await send("prompt", { message: "/mxc retry" });
     assert.match(latestStatus(), /files: Native/);

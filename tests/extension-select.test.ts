@@ -24,6 +24,7 @@ function fakePi() {
     registerCommand(name: string, command: any) {
       commands.set(name, command);
     },
+    registerEntryRenderer() {},
     registerFlag() {},
     getFlag() { return undefined; },
     on(event: string, handler: any) {
